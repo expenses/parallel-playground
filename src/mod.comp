@@ -1,0 +1,17 @@
+#version 450
+
+layout(set = 0, binding = 0) buffer Buffer {
+    uint buffer_to_modify[];
+};
+
+layout(push_constant) uniform PushConstants {
+    uint value;
+};
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+
+    buffer_to_modify[i] = buffer_to_modify[i] % value;
+}
