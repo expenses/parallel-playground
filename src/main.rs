@@ -43,3 +43,29 @@ pub fn ascending_values_of_len(len: u32) -> Vec<u32> {
     (0 .. len).map(|_| 1).collect()
 }
 
+fn main() {
+    env_logger::init();
+        
+    let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
+
+    let adapter = pollster::block_on(
+        instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        })
+    ).unwrap();
+
+    let (device, queue) = pollster::block_on(
+        adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("device"),
+            features: wgpu::Features::SPIRV_SHADER_PASSTHROUGH,
+            ..Default::default()
+        }, None)
+    ).unwrap();
+
+    let shader = wgpu::include_spirv_raw!("sum_reduce.comp.spv");
+
+    let module = unsafe {
+        device.create_shader_module_spirv(&shader)
+    };
+}
