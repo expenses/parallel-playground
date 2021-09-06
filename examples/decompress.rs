@@ -1,7 +1,7 @@
 use parallel_playground::*;
 
 fn main() {
-    let input =  [5, 4, 0, 3, 5, 5, 5, 5, 5, 5];
+    let input = [5, 4, 0, 3, 5, 5, 5, 5, 5, 5];
 
     let scanned_input = exclusive_scan(&input);
 
