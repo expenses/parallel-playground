@@ -1,54 +1,3 @@
-pub fn sum(input: &[u32]) -> u32 {
-    input.iter().sum()
-}
-
-pub fn inclusive_scan(input: &[u32]) -> Vec<u32> {
-    input
-        .iter()
-        .scan(0, |state, i| {
-            *state += i;
-
-            Some(*state)
-        })
-        .collect()
-}
-
-pub fn exclusive_scan(input: &[u32]) -> Vec<u32> {
-    input
-        .iter()
-        .scan(0, |state, i| {
-            let prev_state = *state;
-
-            *state += i;
-
-            Some(prev_state)
-        })
-        .collect()
-}
-
-pub fn zeroed_array_of_size(size: u32) -> Vec<u32> {
-    vec![0; size as usize]
-}
-
-pub fn scatter_if_non_zero(output: &mut [u32], indices: &[u32], input: &[u32]) {
-    for i in (0..input.len()).rev() {
-        let value = input[i];
-        if value > 0 {
-            output[indices[i] as usize] = input[i]
-        }
-    }
-}
-
-pub fn scatter_with_value(output: &mut [u32], indices: &[u32], value: u32) {
-    for i in (0..indices.len()).rev() {
-        output[indices[i] as usize] = value;
-    }
-}
-
-pub fn ascending_values_of_len(len: u32) -> Vec<u32> {
-    (0..len).map(|_| 1).collect()
-}
-
 use wgpu::util::DeviceExt;
 
 pub struct Context {
@@ -58,6 +7,7 @@ pub struct Context {
     readwrite_bind_group_layout: wgpu::BindGroupLayout,
     io_bind_group_layout: wgpu::BindGroupLayout,
     scatter_with_value_pipeline: wgpu::ComputePipeline,
+    sum_pipeline: wgpu::ComputePipeline,
 }
 
 impl Context {
@@ -153,17 +103,14 @@ impl Context {
                 }],
             });
 
-        let sum_reduce_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("sum reduce"),
-                layout: Some(&io_pipeline_layout),
-                module: &unsafe {
-                    device.create_shader_module_spirv(&wgpu::include_spirv_raw!(
-                        "sum_reduce.comp.spv"
-                    ))
-                },
-                entry_point: "main",
-            });
+        let sum_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("sum"),
+            layout: Some(&io_pipeline_layout),
+            module: &unsafe {
+                device.create_shader_module_spirv(&wgpu::include_spirv_raw!("sum.comp.spv"))
+            },
+            entry_point: "main",
+        });
 
         let scatter_with_value_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -193,10 +140,11 @@ impl Context {
             readwrite_bind_group_layout,
             io_bind_group_layout,
             scatter_with_value_pipeline,
+            sum_pipeline,
         }
     }
 
-    pub fn upload(&self, bytes: &[u32]) -> MappableStorageBuffer {
+    pub fn upload<T: bytemuck::Pod>(&self, bytes: &[T]) -> MappableStorageBuffer<T> {
         MappableStorageBuffer {
             inner: self
                 .device
@@ -206,6 +154,7 @@ impl Context {
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::MAP_READ,
                 }),
             size: bytes.len() as u32,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -223,7 +172,7 @@ impl Context {
             .submit(std::iter::once(pass.command_encoder.finish()));
     }
 
-    pub fn read_buffer<'a>(&self, buffer: &'a MappableStorageBuffer) -> MappedBuffer<'a> {
+    pub fn read_buffer<'a, T>(&self, buffer: &'a MappableStorageBuffer<T>) -> MappedBuffer<'a, T> {
         let slice = buffer.inner.slice(..);
 
         let map_future = slice.map_async(wgpu::MapMode::Read);
@@ -232,7 +181,10 @@ impl Context {
 
         pollster::block_on(map_future).unwrap();
 
-        MappedBuffer(slice.get_mapped_range())
+        MappedBuffer {
+            view: slice.get_mapped_range(),
+            _phantom: buffer._phantom,
+        }
     }
 }
 
@@ -242,7 +194,7 @@ pub struct Pass<'a> {
 }
 
 impl<'a> Pass<'a> {
-    pub fn mod_buffer_in_place(&mut self, buffer: &MappableStorageBuffer, value: u32) {
+    pub fn mod_buffer_in_place(&mut self, buffer: &MappableStorageBuffer<u32>, value: u32) {
         let bind_group = self
             .context
             .device
@@ -267,8 +219,8 @@ impl<'a> Pass<'a> {
 
     pub fn scatter_with_value(
         &mut self,
-        indices: &MappableStorageBuffer,
-        output: &MappableStorageBuffer,
+        indices: &MappableStorageBuffer<u32>,
+        output: &MappableStorageBuffer<u32>,
         value: u32,
     ) {
         let bind_group = self
@@ -299,81 +251,61 @@ impl<'a> Pass<'a> {
         compute_pass.dispatch(dispatch_count(indices.size, 64), 1, 1);
     }
 
-    pub fn upload(&self, bytes: &[u32]) -> MappableStorageBuffer {
+    pub fn sum(
+        &mut self,
+        inputs: &MappableStorageBuffer<u32>,
+        output: &MappableStorageBuffer<u32>,
+    ) {
+        let bind_group = self
+            .context
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &self.context.io_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: inputs.inner.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: output.inner.as_entire_binding(),
+                    },
+                ],
+            });
+
+        let mut compute_pass = self
+            .command_encoder
+            .begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
+
+        compute_pass.set_pipeline(&self.context.sum_pipeline);
+        compute_pass.set_bind_group(0, &bind_group, &[]);
+        compute_pass.dispatch(dispatch_count(inputs.size, 64), 1, 1);
+    }
+
+    pub fn upload<T: bytemuck::Pod>(&self, bytes: &[T]) -> MappableStorageBuffer<T> {
         self.context.upload(bytes)
     }
 }
 
-pub struct MappedBuffer<'a>(wgpu::BufferView<'a>);
+pub struct MappedBuffer<'a, T> {
+    view: wgpu::BufferView<'a>,
+    _phantom: std::marker::PhantomData<T>,
+}
 
-impl<'a> std::ops::Deref for MappedBuffer<'a> {
-    type Target = [u32];
+impl<'a, T: bytemuck::Pod> std::ops::Deref for MappedBuffer<'a, T> {
+    type Target = [T];
 
     fn deref(&self) -> &Self::Target {
-        bytemuck::cast_slice(&self.0)
+        bytemuck::cast_slice(&self.view)
     }
 }
 
-pub struct MappableStorageBuffer {
+pub struct MappableStorageBuffer<T> {
     inner: wgpu::Buffer,
     size: u32,
+    _phantom: std::marker::PhantomData<T>,
 }
-
-/*
-fn main() {
-
-    let slice: &[u32] = &[394848, 33,3, 2,2,2,32,32,3];
-
-    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None,
-        contents: bytemuck::cast_slice(slice),
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::MAP_READ,
-    });
-
-    let test_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None,
-        layout: &readwrite_bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }
-        ]
-    });
-
-    let mut command_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-        label: None,
-    });
-
-    let mut compute_pass = command_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-        label: None,
-    });
-
-    compute_pass.set_pipeline(&mod_pipeline);
-    compute_pass.set_bind_group(0, &test_bg, &[]);
-    compute_pass.set_push_constants(0, bytemuck::bytes_of(&5_u32));
-    compute_pass.dispatch(1, 1, 1);
-
-
-    drop(compute_pass);
-
-    queue.submit(std::iter::once(command_encoder.finish()));
-
-    let slice = buffer.slice(..);
-
-    let map_future = slice.map_async(wgpu::MapMode::Read);
-
-    device.poll(wgpu::Maintain::Wait);
-
-    pollster::block_on(map_future).unwrap();
-
-    let slice = slice.get_mapped_range();
-
-    let bytes: &[u32] = bytemuck::cast_slice(&slice);
-
-    println!("{:?}" ,bytes);
-}
-*/
 
 fn dispatch_count(num: u32, group_size: u32) -> u32 {
     let mut count = num / group_size;

@@ -1,0 +1,15 @@
+#version 450
+
+layout(set = 0, binding = 0) readonly buffer Input {
+    uint inputs[];
+};
+
+layout(set = 0, binding = 1) writeonly buffer Output {
+    uint output_value;
+};
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main() {
+    atomicAdd(output_value, inputs[gl_GlobalInvocationID.x]);
+}
