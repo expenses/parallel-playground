@@ -11,5 +11,6 @@ layout(set = 0, binding = 1) writeonly buffer Output {
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
 void main() {
+    // todo: how slow is this? Speed up with subgroup ops.
     atomicAdd(output_value, inputs[gl_GlobalInvocationID.x]);
 }
