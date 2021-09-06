@@ -1,6 +1,8 @@
 use parallel_playground::*;
 
 fn main() {
+    env_logger::init();
+
     let input = [5, 4, 0, 3, 5, 5, 5, 5, 5, 5];
 
     let context = Context::new();

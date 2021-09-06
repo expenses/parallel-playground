@@ -1,6 +1,8 @@
 use parallel_playground::*;
 
 fn main() {
+    env_logger::init();
+
     let context = Context::new();
 
     let buffer = context.upload(&[2; 100024][..]);

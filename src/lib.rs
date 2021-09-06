@@ -17,8 +17,6 @@ pub struct Context {
 impl Context {
     /// Create a new context for doing operations. Will panic on failure.
     pub fn new() -> Self {
-        env_logger::init();
-
         let instance = wgpu::Instance::new(wgpu::Backends::PRIMARY);
 
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {

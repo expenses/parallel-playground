@@ -1,16 +1,3 @@
-pub struct MappedBuffer<'a, T> {
-    view: wgpu::BufferView<'a>,
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<'a, T: bytemuck::Pod> std::ops::Deref for MappedBuffer<'a, T> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target {
-        bytemuck::cast_slice(&self.view)
-    }
-}
-
 pub struct MappableStorageBuffer<T> {
     pub(crate) inner: wgpu::Buffer,
     pub(crate) size: u32,
@@ -34,7 +21,7 @@ impl<T: bytemuck::Pod> UploadableBuffer for MappableStorageBuffer<T> {
 }
 
 impl<'a, T> MappableBuffer<'a> for MappableStorageBuffer<T> {
-    type Mapped = MappedBuffer<'a, T>;
+    type Mapped = MappedStorageBuffer<'a, T>;
 
     fn slice(&self) -> wgpu::BufferSlice {
         self.inner.slice(..)
@@ -45,6 +32,19 @@ impl<'a, T> MappableBuffer<'a> for MappableStorageBuffer<T> {
             view: slice.get_mapped_range(),
             _phantom: std::marker::PhantomData,
         }
+    }
+}
+
+pub struct MappedStorageBuffer<'a, T> {
+    view: wgpu::BufferView<'a>,
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<'a, T: bytemuck::Pod> std::ops::Deref for MappedStorageBuffer<'a, T> {
+    type Target = [T];
+
+    fn deref(&self) -> &Self::Target {
+        bytemuck::cast_slice(&self.view)
     }
 }
 
