@@ -3,9 +3,9 @@ use parallel_playground::*;
 fn main() {
     let context = Context::new();
 
-    let buffer = context.upload(&[2; 100024]);
+    let buffer = context.upload(&[2; 100024][..]);
 
-    let output = context.upload(&[0]);
+    let output = context.upload(&0);
 
     context.do_in_pass(|pass| {
         //pass.mod_buffer_in_place(&buffer, 9);

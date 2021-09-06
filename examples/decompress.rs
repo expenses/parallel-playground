@@ -3,7 +3,27 @@ use parallel_playground::*;
 fn main() {
     let input = [5, 4, 0, 3, 5, 5, 5, 5, 5, 5];
 
-    let scanned_input = exclusive_scan(&input);
+    let context = Context::new();
+
+    let buffer = context.upload(&input[..]);
+
+    let size = {
+        let output = context.upload(&0);
+
+        context.do_in_pass(|pass| {
+            pass.sum(&buffer, &output);
+        });
+
+        let output = context.read_buffer(&output);
+
+        *output
+    };
+
+    let output = context.storage_buffer_of_length::<u32>(size);
+
+    println!("{:?}", &*context.read_buffer(&output));
+
+    /*let scanned_input = exclusive_scan(&input);
 
     let output_size = sum(&input);
 
@@ -21,5 +41,5 @@ fn main() {
 
     let mapped = x.iter().map(|&v| v % 2).collect::<Vec<_>>();
 
-    println!("{:?}", mapped);
+    println!("{:?}", mapped);*/
 }

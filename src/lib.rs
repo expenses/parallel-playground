@@ -1,5 +1,9 @@
 use wgpu::util::DeviceExt;
 
+pub mod buffers;
+
+use buffers::*;
+
 pub struct Context {
     device: wgpu::Device,
     queue: wgpu::Queue,
@@ -11,6 +15,7 @@ pub struct Context {
 }
 
 impl Context {
+    /// Create a new context for doing operations. Will panic on failure.
     pub fn new() -> Self {
         env_logger::init();
 
@@ -144,20 +149,37 @@ impl Context {
         }
     }
 
-    pub fn upload<T: bytemuck::Pod>(&self, bytes: &[T]) -> MappableStorageBuffer<T> {
+    /// Create a new (zeroed?) buffer of a certain size.
+    pub fn storage_buffer_of_length<T: bytemuck::Pod>(
+        &self,
+        size: u32,
+    ) -> MappableStorageBuffer<T> {
         MappableStorageBuffer {
-            inner: self
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: bytemuck::cast_slice(bytes),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::MAP_READ,
-                }),
-            size: bytes.len() as u32,
+            inner: self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: size as u64 * std::mem::size_of::<T>() as u64,
+                mapped_at_creation: false,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::MAP_READ,
+            }),
+            size,
             _phantom: std::marker::PhantomData,
         }
     }
 
+    /// Upload some bytes into a buffer.
+    pub fn upload<T: UploadableBuffer>(&self, source: &T::Source) -> T {
+        T::new_from_buffer(
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: T::map_source_to_bytes(source),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::MAP_READ,
+                }),
+            source,
+        )
+    }
+
+    /// Perform a computation pass and submit it to the queue when finished.
     pub fn do_in_pass<T: Fn(&mut Pass)>(&self, closure: T) {
         let mut pass = Pass {
             context: self,
@@ -172,8 +194,9 @@ impl Context {
             .submit(std::iter::once(pass.command_encoder.finish()));
     }
 
-    pub fn read_buffer<'a, T>(&self, buffer: &'a MappableStorageBuffer<T>) -> MappedBuffer<'a, T> {
-        let slice = buffer.inner.slice(..);
+    /// Map a buffer to the CPU.
+    pub fn read_buffer<'a, T: MappableBuffer<'a>>(&self, buffer: &'a T) -> T::Mapped {
+        let slice = buffer.slice();
 
         let map_future = slice.map_async(wgpu::MapMode::Read);
 
@@ -181,19 +204,18 @@ impl Context {
 
         pollster::block_on(map_future).unwrap();
 
-        MappedBuffer {
-            view: slice.get_mapped_range(),
-            _phantom: buffer._phantom,
-        }
+        T::from_mapped_slice(slice)
     }
 }
 
+/// A compute pass.
 pub struct Pass<'a> {
     context: &'a Context,
     command_encoder: wgpu::CommandEncoder,
 }
 
 impl<'a> Pass<'a> {
+    /// Perform an element wise mod (`%`) operation on a buffer, in-place.
     pub fn mod_buffer_in_place(&mut self, buffer: &MappableStorageBuffer<u32>, value: u32) {
         let bind_group = self
             .context
@@ -217,6 +239,10 @@ impl<'a> Pass<'a> {
         compute_pass.dispatch(dispatch_count(buffer.size, 64), 1, 1);
     }
 
+    /// Scatter a constant value into a buffer at the indices specified.
+    ///
+    /// For example, with a buffer `[0, 0, 0, 0, 0]` the indices `[1, 3]` and the value `1`,
+    /// the resulting buffer will become `[0, 1, 0, 1, 0]`.
     pub fn scatter_with_value(
         &mut self,
         indices: &MappableStorageBuffer<u32>,
@@ -251,10 +277,11 @@ impl<'a> Pass<'a> {
         compute_pass.dispatch(dispatch_count(indices.size, 64), 1, 1);
     }
 
+    /// Perform a sum reduction on the buffer to a single value output buffer.
     pub fn sum(
         &mut self,
         inputs: &MappableStorageBuffer<u32>,
-        output: &MappableStorageBuffer<u32>,
+        output: &MappableSingleValueBuffer<u32>,
     ) {
         let bind_group = self
             .context
@@ -283,28 +310,10 @@ impl<'a> Pass<'a> {
         compute_pass.dispatch(dispatch_count(inputs.size, 64), 1, 1);
     }
 
-    pub fn upload<T: bytemuck::Pod>(&self, bytes: &[T]) -> MappableStorageBuffer<T> {
-        self.context.upload(bytes)
+    /// See `[Context::upload]`.
+    pub fn upload<T: UploadableBuffer>(&self, source: &T::Source) -> T {
+        self.context.upload(source)
     }
-}
-
-pub struct MappedBuffer<'a, T> {
-    view: wgpu::BufferView<'a>,
-    _phantom: std::marker::PhantomData<T>,
-}
-
-impl<'a, T: bytemuck::Pod> std::ops::Deref for MappedBuffer<'a, T> {
-    type Target = [T];
-
-    fn deref(&self) -> &Self::Target {
-        bytemuck::cast_slice(&self.view)
-    }
-}
-
-pub struct MappableStorageBuffer<T> {
-    inner: wgpu::Buffer,
-    size: u32,
-    _phantom: std::marker::PhantomData<T>,
 }
 
 fn dispatch_count(num: u32, group_size: u32) -> u32 {
